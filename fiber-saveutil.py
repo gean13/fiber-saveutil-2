@@ -1,179 +1,127 @@
-
-import re
-import sys
-from os import name as os_name
-import struct
 import argparse
-
+import os
+import re
 from pathlib import Path
 
-from sfo import Sfo
-from save import GameData, SaveFile
+# Imports the save.py helper module
+import save
 
-def convert_gamedata(path_in, path_out):
-    print(f"found ps4 game data -- {path_in}")
-    if os_name == "posix":
-        sfo_path = Path(path_in.parent / "sce_sys/param.sfo")
+
+def convert_save(src_path: Path, dst_path: Path, target_platform: str = "pc", target_size: int = 4896):
+    """
+    Converts decrypted PS4 saves to PC or PS5 compatible saves.
+    Pads or truncates output containers to match PS5 Garlic Save Manager slot allocations if requested.
+    """
+    dst_path.mkdir(parents=True, exist_ok=True)
+
+    for root, _, files in os.walk(src_path):
+        for file in files:
+            if file.endswith(".DAT"):
+                file_path = Path(root) / file
+                
+                # Raw string fix for Python regex warning
+                n = re.search(r"(DATA\d\d|SYSTEM)", file_path.parent.name.upper())
+                if not n:
+                    continue
+                
+                slot_name = n.group(1)
+                out_dir = dst_path / slot_name
+                out_dir.mkdir(parents=True, exist_ok=True)
+                out_file = out_dir / "DATA.DAT"
+
+                print(f"Converting {file_path} -> {out_file} (Target: {target_platform.upper()})")
+
+                with open(file_path, "rb") as f:
+                    data = f.read()
+
+                converted_data = save.convert_ps4_to_pc(data)
+
+                # Apply PS5 byte padding/truncation if targeting PS5
+                if target_platform.lower() == "ps5":
+                    current_len = len(converted_data)
+                    if current_len < target_size:
+                        converted_data = converted_data + b"\x00" * (target_size - current_len)
+                    elif current_len > target_size:
+                        converted_data = converted_data[:target_size]
+
+                with open(out_file, "wb") as f:
+                    f.write(converted_data)
+
+
+def dump_save(file_path: Path, raw: bool = False, target_platform: str = "pc", target_size: int = 4896):
+    """
+    Decrypts/dumps or encrypts/packs a P5R save file.
+    """
+    with open(file_path, "rb") as f:
+        data = f.read()
+
+    if raw:
+        output_data = save.decrypt_save(data)
+        out_file = file_path.with_suffix(".decrypted.DAT")
     else:
-        sfo_path = Path(path_in / "../sce_sys/param.sfo")
+        output_data = save.encrypt_save(data)
+        
+        # Apply PS5 byte padding if encrypting/packing for Garlic Save Manager
+        if target_platform.lower() == "ps5":
+            current_len = len(output_data)
+            if current_len < target_size:
+                output_data = output_data + b"\x00" * (target_size - current_len)
+            elif current_len > target_size:
+                output_data = output_data[:target_size]
 
-    detail = b""
-    if sfo_path.is_file():
-        with open(sfo_path, "rb") as sfo:
-            detail = Sfo().read(sfo).get_entry("DETAIL").value
-    else:
-        print(f"warn: couldn't find param.sfo for save -- {path_in}")
+        out_file = file_path.with_suffix(".encrypted.DAT")
 
-    pc = SaveFile()
+    with open(out_file, "wb") as f:
+        f.write(output_data)
 
-    name_utf8 = [b"", b""]
-    with open(path_in, "rb") as ps4:
-        gd = GameData().read(ps4)
-        name_utf8 = gd.get_block(0x1001C).full_name_utf8.strip(b'\x00').split(b' ')
-        pc.header = gd.header
-        ps4.seek(0, 0)
-        pc.data = ps4.read()
+    print(f"Processed save saved to: {out_file}")
 
-    pc.header.lname = name_utf8[1]
-    pc.header.fname = name_utf8[0]
-    pc.header.desc = detail
-    pc.header.lang0 = 0xFF
-
-    path_out.mkdir(parents=True, exist_ok=True)
-    with open(path_out / "DATA.DAT", "wb") as fso:
-        print(f"converted gamedata -- {path_out / 'DATA.DAT'}")
-        fso.write(pc.pack())
-
-def convert_sysdata(path_in, path_out):
-    print(f"found ps4 system data -- {path_in}")
-
-    pc = SaveFile()
-    pc.header = None
-
-    with open(path_in, "rb") as ps4:
-        pc.data = ps4.read()
-
-    path_out.mkdir(parents=True, exist_ok=True)
-    with open(path_out / "SYSTEM.DAT", "wb") as fso:
-        print(f"converted sysdata -- {path_out / 'SYSTEM.DAT'}")
-        fso.write(pc.pack())
-
-def convert_save(path_in: Path, path_out: Path):
-    with open(path_in, "rb") as fsi:
-        m = struct.unpack("<I", fsi.read(4))[0]
-        fsi.seek(0x48, 0)
-        c = struct.unpack("<Q", fsi.read(8))[0]
-
-    if m == 0x2D000000:
-        if c != 0xA002000001000100:
-            print("error: only us/eu ps4 saves are supported")
-            return
-        convert_gamedata(path_in, path_out)
-    elif m == 0x00000002: convert_sysdata(path_in, path_out)
-    else: print(f"error: not a ps4 save -- {path_in}")
-
-def convert_saves(path_in: Path, path_out: Path):
-    saves = [f for f in path_in.glob("./*.DAT") if f.is_file()]
-    if len(saves) != 0:
-        convert_save(saves[0], path_out)
-        return
-
-    saves = [f for f in path_in.glob("**/*.DAT") if f.is_file()]
-    if len(saves) != 0:
-        for save in saves:
-            n = re.search("(DATA\d\d|SYSTEM)", save.parent.name.upper())
-            convert_save(save, path_out / n[0] if n else path_out)
-        return
-
-    print(f"error: no saves were found in the provided input path -- {path_in}")
-
-def command_convert(args):
-    path_in = Path(args.path_in[0])
-
-    if not path_in.exists():
-        print("error: input path does not exist")
-        return
-
-    if not path_in.is_dir():
-        print("error: input path is not a directory")
-        return
-
-    if not args.path_out:
-        path_out = path_in.with_name(f"{path_in.name}--out")
-    else:
-        path_out = Path(args.path_out)
-
-    if path_out.is_file():
-        print("error: output path must be a directory")
-        return
-
-    convert_saves(path_in, path_out)
-
-def dump_save(path_in, path_out, raw):
-    with open(path_in, "rb") as fsi:
-        m = struct.unpack("<4s", fsi.read(4))[0]
-
-    if m != b"DATA":
-        print("error: input is not a pc save")
-        return
-
-    with open(path_in, "rb") as fsi:
-        print(f"parsing save -- {path_in}")
-        pc = SaveFile().unpack(fsi.read())
-
-        with open(path_out, "wb") as fso:
-            print(f"dumping save -- {path_out}")
-            fso.write(pc.pack(not raw, not raw))
-
-def command_dump(args):
-    path_in = Path(args.path_in[0])
-
-    if not path_in.exists():
-        print("error: input path does not exist")
-        return
-
-    if not path_in.is_file():
-        print("error: input path is not a file")
-        return
-
-    if not args.path_out:
-        path_out = path_in.with_name(f"{path_in.name}--out")
-    else:
-        path_out = Path(args.path_out)
-
-        if path_out.is_dir():
-            path_out = path_out / path_in.name
-        elif path_out.parent.is_dir():
-            pass
-        else:
-            print("error: invalid output path")
-            return
-
-    if path_in.resolve() == path_out.resolve():
-        print("error: input and output path must differ")
-        return
-
-    dump_save(path_in, path_out, args.raw)
-
-def create_parser():
-    parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(dest = "command")
-    sp_convert = subparsers.add_parser("convert", help="convert between save formats")
-    sp_convert.add_argument("path_in", help="ps4 save path", nargs=1)
-    sp_convert.add_argument("path_out", help="pc save path", nargs='?')
-    sp_dump = subparsers.add_parser("dump", help="decrypt/encrypt pc saves")
-    sp_dump.add_argument("--raw", help="don't encrypt/compress", action="store_true", default=False)
-    sp_dump.add_argument("path_in", help="input pc save", nargs=1)
-    sp_dump.add_argument("path_out", help="output pc save", nargs='?')
-    return parser
 
 def main():
-    parser = create_parser()
-    args = parser.parse_args(sys.argv[1:])
+    parser = argparse.ArgumentParser(description="Persona 5 Royal PC & PS5 Save Utility")
+    subparsers = parser.add_subparsers(dest="command", required=True)
 
-    if args.command == "convert": command_convert(args)
-    elif args.command == "dump": command_dump(args)
-    else: parser.print_help()
+    # Convert Command
+    convert_parser = subparsers.add_parser("convert", help="Convert PS4 saves to PC/PS5 format")
+    convert_parser.add_argument("src", type=Path, help="Path to input PS4 save directory")
+    convert_parser.add_argument("dst", type=Path, help="Path to output save directory")
+    convert_parser.add_argument(
+        "--target-platform",
+        choices=["pc", "ps5"],
+        default="pc",
+        help="Target platform format (default: pc)",
+    )
+    convert_parser.add_argument(
+        "--size",
+        type=int,
+        default=4896,
+        help="Target PS5 Garlic Save Manager container size in bytes (default: 4896)",
+    )
+
+    # Dump Command
+    dump_parser = subparsers.add_parser("dump", help="Decrypt or encrypt PC/PS5 saves")
+    dump_parser.add_argument("file", type=Path, help="Path to target DATA.DAT save file")
+    dump_parser.add_argument("--raw", action="store_true", help="Dump raw decrypted payload")
+    dump_parser.add_argument(
+        "--target-platform",
+        choices=["pc", "ps5"],
+        default="pc",
+        help="Target platform format when re-packing (default: pc)",
+    )
+    dump_parser.add_argument(
+        "--size",
+        type=int,
+        default=4896,
+        help="Target PS5 container byte size when repacking (default: 4896)",
+    )
+
+    args = parser.parse_args()
+
+    if args.command == "convert":
+        convert_save(args.src, args.dst, target_platform=args.target_platform, target_size=args.size)
+    elif args.command == "dump":
+        dump_save(args.file, raw=args.raw, target_platform=args.target_platform, target_size=args.size)
+
 
 if __name__ == "__main__":
     main()
