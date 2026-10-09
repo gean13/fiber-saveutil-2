@@ -3,8 +3,8 @@ import os
 import re
 from pathlib import Path
 
-# Assuming fiber_save is imported from fiber.py
-import fiber_save
+# Imports the save.py helper module
+import save
 
 
 def convert_save(src_path: Path, dst_path: Path, target_platform: str = "pc", target_size: int = 4896):
@@ -19,7 +19,7 @@ def convert_save(src_path: Path, dst_path: Path, target_platform: str = "pc", ta
             if file.endswith(".DAT"):
                 file_path = Path(root) / file
                 
-                # Regex fix: Using raw string r"(DATA\d\d|SYSTEM)" to fix SyntaxWarning
+                # Raw string fix for Python regex warning
                 n = re.search(r"(DATA\d\d|SYSTEM)", file_path.parent.name.upper())
                 if not n:
                     continue
@@ -34,8 +34,7 @@ def convert_save(src_path: Path, dst_path: Path, target_platform: str = "pc", ta
                 with open(file_path, "rb") as f:
                     data = f.read()
 
-                # Process payload using fiber_save
-                converted_data = fiber_save.convert_ps4_to_pc(data)
+                converted_data = save.convert_ps4_to_pc(data)
 
                 # Apply PS5 byte padding/truncation if targeting PS5
                 if target_platform.lower() == "ps5":
@@ -57,10 +56,10 @@ def dump_save(file_path: Path, raw: bool = False, target_platform: str = "pc", t
         data = f.read()
 
     if raw:
-        output_data = fiber_save.decrypt_save(data)
+        output_data = save.decrypt_save(data)
         out_file = file_path.with_suffix(".decrypted.DAT")
     else:
-        output_data = fiber_save.encrypt_save(data)
+        output_data = save.encrypt_save(data)
         
         # Apply PS5 byte padding if encrypting/packing for Garlic Save Manager
         if target_platform.lower() == "ps5":
