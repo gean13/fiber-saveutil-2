@@ -41,13 +41,13 @@ A save conversion/decryption utility for P5R PC and PS5.
 
    - **For PS5 Output (Garlic Save Manager):**
      ```txt
-     python fiber-saveutil.py convert /path/to/ps4_saves/ /path/to/output_saves/ --target-platform ps5 --size 4896
+     python fiber-saveutil.py convert "/path/to/ps4_saves/" "/path/to/output_saves/" --target-platform ps5 --size 4896
      ```
      *(The `--size 4896` flag applies exact byte-padding required by Garlic Save Manager for PS5 containers).*
 
    - **For PC Output:**
      ```txt
-     python fiber-saveutil.py convert /path/to/ps4_saves/ /path/to/output_saves/ --target-platform pc
+     python fiber-saveutil.py convert "/path/to/ps4_saves/" "/path/to/output_saves/" --target-platform pc
      ```
 
    The result should look like the following:
